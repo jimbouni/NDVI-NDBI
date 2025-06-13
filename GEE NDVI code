@@ -1,0 +1,262 @@
+// ================================================================
+// 1. DEFINE AOI & COLLECTIONS
+// ================================================================
+var guyana = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017')
+                .filter(ee.Filter.eq('country_na', 'Guyana'))
+                .geometry();
+Map.centerObject(guyana, 7);
+
+// Load your administrative boundaries shapefile (asset ID “gy”)
+var gy = ee.FeatureCollection('projects/ee-jamielnedd/assets/gy');
+Map.addLayer(gy.style({color:'000000', fillColor:'00000000'}), {}, 'gy boundaries');
+
+// Sentinel-2 collections
+var S2_SR_HARM    = 'COPERNICUS/S2_SR_HARMONIZED';
+var S2_CLOUD_PROB = 'COPERNICUS/S2_CLOUD_PROBABILITY';
+
+var MAX_CLOUD_PROB = 65;
+
+// Visualization params
+var ndviVis   = {min: -0.5, max: 0.8,  palette: ['white','yellow','green']};
+var ndbiVis   = {min: -0.5, max: 0.5,  palette: ['white','lightgrey','darkgrey']};
+var changeVis = {min: -0.3, max: 0.3,  palette: ['red','white','blue']};
+
+// Center map
+Map.setCenter(-58.9, 4.9, 7);
+
+
+// ================================================================
+// 2. CLOUD-MASKING & EDGE-MASKING
+// ================================================================
+function maskEdges(img) {
+  var maskA = img.select('B8A').mask();
+  var maskB = img.select('B9').mask();
+  return img.updateMask(maskA.updateMask(maskB));
+}
+
+var cloudJoin = ee.Join.saveFirst('cloud_mask');
+function maskClouds(img) {
+  var cloudProb = ee.Image(img.get('cloud_mask')).select('probability');
+  return img.updateMask(cloudProb.lt(MAX_CLOUD_PROB));
+}
+
+
+// ================================================================
+// 3. BUILD YEARLY MEDIAN COMPOSITE (2020 & 2025)
+// ================================================================
+function buildComposite(year) {
+  var start = ee.Date.fromYMD(year, 1, 1);
+  var end   = ee.Date.fromYMD(year, 12, 31);
+  var today = ee.Date(Date.now());
+  end = ee.Date(ee.Algorithms.If(end.millis().gt(today.millis()), today, end));
+  
+  var s2Sr = ee.ImageCollection(S2_SR_HARM)
+                .filterDate(start, end)
+                .filterBounds(guyana)
+                .map(maskEdges);
+  
+  var s2Cloud = ee.ImageCollection(S2_CLOUD_PROB)
+                   .filterDate(start, end)
+                   .filterBounds(guyana);
+  
+  var paired = cloudJoin.apply({
+    primary:   s2Sr,
+    secondary: s2Cloud,
+    condition: ee.Filter.equals({
+      leftField: 'system:index', rightField: 'system:index'
+    })
+  });
+  
+  return ee.ImageCollection(paired)
+           .map(maskClouds)
+           .median()
+           .clip(guyana)
+           .set('year', year);
+}
+
+var comp2020 = buildComposite(2020);
+var comp2025 = buildComposite(2025);
+
+
+// ================================================================
+// 4. COMPUTE & DISPLAY NDVI & NDBI FOR EACH YEAR
+// ================================================================
+function addNDVI(img) {
+  return img.addBands(
+    img.normalizedDifference(['B8','B4']).rename('NDVI')
+  );
+}
+function addNDBI(img) {
+  return img.addBands(
+    img.normalizedDifference(['B11','B8']).rename('NDBI')
+  );
+}
+
+var with2020 = addNDBI(addNDVI(comp2020));
+var with2025 = addNDBI(addNDVI(comp2025));
+
+var ndvi2020 = with2020.select('NDVI').clip(guyana);
+var ndbi2020 = with2020.select('NDBI').clip(guyana);
+var ndvi2025 = with2025.select('NDVI').clip(guyana);
+var ndbi2025 = with2025.select('NDBI').clip(guyana);
+
+Map.addLayer(ndvi2020, ndviVis, 'NDVI 2020', true);
+Map.addLayer(ndbi2020, ndbiVis, 'NDBI 2020', true);
+Map.addLayer(ndvi2025, ndviVis, 'NDVI 2025', true);
+Map.addLayer(ndbi2025, ndbiVis, 'NDBI 2025', true);
+
+
+// ================================================================
+// 5. CALCULATE & DISPLAY ΔNDVI & ΔNDBI
+// ================================================================
+var deltaNDVI = ndvi2025.subtract(ndvi2020).rename('ΔNDVI_2020_2025').clip(guyana);
+var deltaNDBI = ndbi2025.subtract(ndbi2020).rename('ΔNDBI_2020_2025').clip(guyana);
+
+Map.addLayer(deltaNDVI, changeVis, 'ΔNDVI 2020→2025', true);
+Map.addLayer(deltaNDBI, changeVis, 'ΔNDBI 2020→2025', true);
+
+
+// ================================================================
+// 6. EXPORT DELTAS (OPTIONAL)
+// ================================================================
+Export.image.toDrive({
+  image: deltaNDVI,
+  description: 'Delta_NDVI_2020_2025_Guyana',
+  folder: 'EE_Exports',
+  fileNamePrefix: 'Delta_NDVI_2020_2025_Guyana',
+  region: guyana,
+  scale: 10,
+  crs: 'EPSG:4326',
+  maxPixels: 1e13
+});
+Export.image.toDrive({
+  image: deltaNDBI,
+  description: 'Delta_NDBI_2020_2025_Guyana',
+  folder: 'EE_Exports',
+  fileNamePrefix: 'Delta_NDBI_2020_2025_Guyana',
+  region: guyana,
+  scale: 10,
+  crs: 'EPSG:4326',
+  maxPixels: 1e13
+});
+
+
+// ================================================================
+// 7. GLOBAL SUMMARY TABLE
+// ================================================================
+var statsNDVI = deltaNDVI.reduceRegion({
+  reducer: ee.Reducer.mean()
+                    .combine(ee.Reducer.min(), '', true)
+                    .combine(ee.Reducer.max(), '', true)
+                    .combine(ee.Reducer.stdDev(), '', true),
+  geometry: guyana,
+  scale: 1000,
+  bestEffort: true,
+  maxPixels: 1e13
+});
+var statsNDBI = deltaNDBI.reduceRegion({
+  reducer: ee.Reducer.mean()
+                    .combine(ee.Reducer.min(), '', true)
+                    .combine(ee.Reducer.max(), '', true)
+                    .combine(ee.Reducer.stdDev(), '', true),
+  geometry: guyana,
+  scale: 1000,
+  bestEffort: true,
+  maxPixels: 1e13
+});
+var changeFeature = ee.Feature(null, {
+  'Mean_ΔNDVI':   statsNDVI.get('ΔNDVI_2020_2025_mean'),
+  'Min_ΔNDVI':    statsNDVI.get('ΔNDVI_2020_2025_min'),
+  'Max_ΔNDVI':    statsNDVI.get('ΔNDVI_2020_2025_max'),
+  'StdDev_ΔNDVI': statsNDVI.get('ΔNDVI_2020_2025_stdDev'),
+  'Mean_ΔNDBI':   statsNDBI.get('ΔNDBI_2020_2025_mean'),
+  'Min_ΔNDBI':    statsNDBI.get('ΔNDBI_2020_2025_min'),
+  'Max_ΔNDBI':    statsNDBI.get('ΔNDBI_2020_2025_max'),
+  'StdDev_ΔNDBI': statsNDBI.get('ΔNDBI_2020_2025_stdDev')
+});
+var changeCollection = ee.FeatureCollection([changeFeature]);
+print('Change statistics (summary over Guyana):', changeCollection);
+Export.table.toDrive({
+  collection: changeCollection,
+  description: 'Guyana_Change_Stats_2020_2025',
+  folder: 'EE_Exports',
+  fileNamePrefix: 'Guyana_Change_Stats_2020_2025',
+  fileFormat: 'CSV'
+});
+
+
+// ================================================================
+// 8. ZONAL STATISTICS BY REGION
+// ================================================================
+function zonalStats(image, band, period) {
+  return image.select(band)
+    .reduceRegions({
+      collection: gy,
+      reducer: ee.Reducer.mean()
+                        .combine(ee.Reducer.min(), '', true)
+                        .combine(ee.Reducer.max(), '', true)
+                        .combine(ee.Reducer.stdDev(), '', true),
+      scale: 30,
+      tileScale: 4
+    })
+    .map(function(f) {
+      return f.set({variable: band, period: period});
+    });
+}
+
+var zs_ndvi2020 = zonalStats(ndvi2020, 'NDVI', '2020');
+var zs_ndbi2020 = zonalStats(ndbi2020, 'NDBI', '2020');
+var zs_ndvi2025 = zonalStats(ndvi2025, 'NDVI', '2025');
+var zs_ndbi2025 = zonalStats(ndbi2025, 'NDBI', '2025');
+var zs_dNDVI    = zonalStats(deltaNDVI, 'ΔNDVI_2020_2025', 'Δ2020_2025');
+var zs_dNDBI    = zonalStats(deltaNDBI, 'ΔNDBI_2020_2025', 'Δ2020_2025');
+
+var allZonal = zs_ndvi2020
+  .merge(zs_ndbi2020)
+  .merge(zs_ndvi2025)
+  .merge(zs_ndbi2025)
+  .merge(zs_dNDVI)
+  .merge(zs_dNDBI);
+
+print('Zonal statistics by region (gy):', allZonal.limit(10));
+Export.table.toDrive({
+  collection: allZonal,
+  description: 'Guyana_Zonal_Stats_2020_2025',
+  folder: 'EE_Exports',
+  fileNamePrefix: 'ZonalStats_2020_2025',
+  fileFormat: 'CSV'
+});
+
+
+// ================================================================
+// 9. ADD LEGEND PANEL
+// ================================================================
+var legend = ui.Panel({
+  style: {
+    position: 'top-left',
+    padding: '8px 15px',
+    backgroundColor: 'white'
+  }
+});
+legend.add(ui.Label('Legend', {fontWeight:'bold', fontSize:'14px'}));
+
+function makeColorBar(palette, min, max) {
+  var lon = ee.Image.pixelLonLat().select('longitude');
+  var ramp = lon.multiply((max-min)/360).add((min+max)/2);
+  var vis = ramp.visualize({min:min, max:max, palette:palette});
+  return ui.Thumbnail({
+    image: vis,
+    params:{bbox:[-180,0,180,1], dimensions:'200x12'},
+    style:{stretch:'horizontal', margin:'4px 0'}
+  });
+}
+
+legend
+  .add(ui.Label('NDVI  (–0.5 → 0.8)'))
+  .add(makeColorBar(ndviVis.palette, ndviVis.min, ndviVis.max))
+  .add(ui.Label('NDBI  (–0.5 → 0.5)'))
+  .add(makeColorBar(ndbiVis.palette, ndbiVis.min, ndbiVis.max))
+  .add(ui.Label('Δ (2025–2020)'))
+  .add(makeColorBar(changeVis.palette, changeVis.min, changeVis.max));
+
+Map.add(legend);
