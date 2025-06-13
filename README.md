@@ -99,16 +99,6 @@ This repository contains a Google Earth Engine (GEE) script that:
 
 > **Note** — Large rasters are *not* version‑controlled here. They live in your Drive bucket to keep the repo lightweight.
 
----
-
-## Citation
-
-If you use or adapt this code, please cite:
-
-> Nedd, J. (2024). *Guyana’s Oil Boom and Spatial Inequality: A Remote‑Sensing Assessment* \[MSc dissertation, University X].
-
----
-
 ## License
 
 [MIT](LICENSE) — free to re‑use, but please give credit.
