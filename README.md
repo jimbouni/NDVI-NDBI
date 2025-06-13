@@ -92,8 +92,8 @@ This repository contains a Google Earth Engine (GEE) script that:
 
 | File                                | Description                                            |
 | ----------------------------------- | ------------------------------------------------------ |
-| `Delta_NDVI_2020_2025_Guyana.tif`   | 10‑m GeoTIFF of vegetation change                      |
-| `Delta_NDBI_2020_2025_Guyana.tif`   | 10‑m GeoTIFF of built‑up change                        |
+| `Delta_NDVI_2020_2025_Guyana.tif`   | GeoTIFF of vegetation change                      |
+| `Delta_NDBI_2020_2025_Guyana.tif`   | GeoTIFF of built‑up change                        |
 | `Guyana_Change_Stats_2020_2025.csv` | One‑row CSV: national mean/min/max/SD for both indices |
 | `ZonalStats_2020_2025.csv`          | Per‑region stats (admin boundaries in `gy`)            |
 
